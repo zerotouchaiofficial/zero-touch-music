@@ -1,11 +1,6 @@
 """
 process_audio.py
-Downloads the source audio with yt-dlp and applies:
-  • Slowed to 0.80× speed  (dreamy tempo)
-  • Reverb using Pedalboard (Spotify open-source)
-  • Slight bass boost + high-frequency softening for lofi feel
-  • Fade-in (3s) and fade-out (4s)
-  • Exported as high-quality MP3 (320kbps)
+Downloads audio with yt-dlp then applies slowed + reverb effects.
 """
 
 import os
@@ -21,23 +16,27 @@ import librosa
 
 log = logging.getLogger("yt-uploader")
 
-SLOW_FACTOR  = 0.80   # 80% of original speed
-REVERB_ROOM  = 0.75   # Room size (0-1)
-REVERB_WET   = 0.35   # Wet/dry mix
-TARGET_LUFS  = -14.0  # Loudness target (YouTube standard)
+SLOW_FACTOR = 0.80
+REVERB_ROOM = 0.75
+REVERB_WET  = 0.35
+TARGET_LUFS = -14.0
+
+# Cookies file written by the workflow step
+COOKIES_PATH = Path("/tmp/yt_cookies.txt")
 
 
 def process_audio(video_id: str, title: str, artist: str, temp_dir: str) -> str:
-    temp    = Path(temp_dir)
-    raw     = temp / f"{video_id}_raw.%(ext)s"
-    out     = temp / f"{video_id}_slowed_reverb.mp3"
+    temp = Path(temp_dir)
+    raw  = temp / f"{video_id}_raw.%(ext)s"
+    out  = temp / f"{video_id}_slowed_reverb.mp3"
 
-    # Write cookies to temp file if available
-    cookies_file = None
-    yt_cookies = os.environ.get("YT_COOKIES", "")
-    if yt_cookies:
-        cookies_file = temp / "cookies.txt"
-        cookies_file.write_text(yt_cookies)
+    # Check cookies
+    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 100:
+        log.info(f"  Cookies found: {COOKIES_PATH.stat().st_size} bytes")
+        cookies_arg = ["--cookies", str(COOKIES_PATH)]
+    else:
+        log.warning("  No cookies found — download may fail on GitHub Actions")
+        cookies_arg = []
 
     # Download
     log.info(f"  Downloading audio for video_id={video_id}...")
@@ -55,15 +54,13 @@ def process_audio(video_id: str, title: str, artist: str, temp_dir: str) -> str:
         "--geo-bypass",
         "--extractor-args", "youtube:player_client=web,ios",
         "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    ]
-    if cookies_file and cookies_file.exists():
-        cmd += ["--cookies", str(cookies_file)]
+    ] + cookies_arg
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"yt-dlp failed: {result.stderr}")
 
-    # Find downloaded file (extension may vary before conversion)
+    # Find downloaded file
     downloaded = list(temp.glob(f"{video_id}_raw.*"))
     if not downloaded:
         raise FileNotFoundError(f"Downloaded file not found in {temp}")
@@ -84,7 +81,7 @@ def process_audio(video_id: str, title: str, artist: str, temp_dir: str) -> str:
 
     log.info(f"  Downloaded: {raw_file.stat().st_size / 1024:.0f} KB")
 
-    # Load with librosa for time-stretching
+    # Slow down
     log.info("  Applying slowed effect (0.80x)...")
     y, sr = librosa.load(str(raw_file), sr=44100, mono=False)
 
@@ -121,21 +118,17 @@ def process_audio(video_id: str, title: str, artist: str, temp_dir: str) -> str:
     log.info("  Adding fade-in/out...")
     seg = AudioSegment.from_wav(str(wav_path))
     seg = seg.fade_in(3000).fade_out(4000)
-
     seg.export(str(out), format="mp3", bitrate="320k",
-               tags={
-                   "title":  f"{title} (Slowed + Reverb)",
-                   "artist": artist,
-               })
+               tags={"title": f"{title} (Slowed + Reverb)", "artist": artist})
 
-    log.info(f"  Processed audio saved: {out.name} ({out.stat().st_size / (1024*1024):.1f} MB)")
+    log.info(f"  Processed audio: {out.name} ({out.stat().st_size / (1024*1024):.1f} MB)")
     return str(out)
 
 
 def _normalize_loudness(audio: np.ndarray, sr: int) -> np.ndarray:
     try:
         import pyloudnorm as pyln
-        meter = pyln.Meter(sr)
+        meter    = pyln.Meter(sr)
         loudness = meter.integrated_loudness(audio.T)
         if loudness > -70:
             audio = pyln.normalize.loudness(audio.T, loudness, TARGET_LUFS).T
