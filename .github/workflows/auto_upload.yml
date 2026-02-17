@@ -75,6 +75,7 @@ jobs:
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           CHANNEL_NAME:     ${{ secrets.CHANNEL_NAME }}
           VIDEO_PRIVACY:    ${{ github.event.inputs.privacy || 'public' }}
+          YT_COOKIES:       ${{ secrets.YT_COOKIES }}
         run: |
           cd src
           python main.py
