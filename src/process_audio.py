@@ -1,7 +1,6 @@
 """
 process_audio.py
 Downloads audio with yt-dlp then applies slowed + reverb effects.
-Tries multiple player clients to bypass bot detection.
 """
 
 import os
@@ -17,48 +16,58 @@ import librosa
 
 log = logging.getLogger("yt-uploader")
 
-SLOW_FACTOR = 0.80
-REVERB_ROOM = 0.75
-REVERB_WET  = 0.35
-TARGET_LUFS = -14.0
+SLOW_FACTOR  = 0.80
+REVERB_ROOM  = 0.75
+REVERB_WET   = 0.35
+TARGET_LUFS  = -14.0
 COOKIES_PATH = Path("/tmp/yt_cookies.txt")
 
 
 def _try_download(url: str, raw: Path, cookies_arg: list) -> subprocess.CompletedProcess:
-    """Try downloading with multiple player clients until one works."""
-    player_clients = [
-        "web",
-        "ios",
-        "tv_embedded",
-        "mweb",
-        "android",
+    """Try downloading with multiple format/client combos until one works."""
+    attempts = [
+        # (player_client, format_selector)
+        ("ios",         "bestaudio"),
+        ("web",         "bestaudio"),
+        ("android",     "bestaudio"),
+        ("ios",         "worstaudio/bestaudio"),   # some videos only have one format
+        ("tv_embedded", "bestaudio/best"),
+        ("mweb",        "bestaudio/best"),
+        ("ios",         None),                      # let yt-dlp decide format
+        ("web",         None),
     ]
 
-    for client in player_clients:
-        log.info(f"  Trying player client: {client}...")
+    for client, fmt in attempts:
+        label = f"client={client} fmt={fmt or 'auto'}"
+        log.info(f"  Trying {label}...")
+
         cmd = [
             "yt-dlp",
             url,
             "-x",
             "--audio-format", "mp3",
             "--audio-quality", "0",
-            "-f", "bestaudio/best",
             "-o", str(raw),
             "--no-playlist",
             "--quiet",
             "--no-warnings",
             "--geo-bypass",
             "--extractor-args", f"youtube:player_client={client}",
-            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        ] + cookies_arg
+            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        ]
+
+        if fmt:
+            cmd += ["-f", fmt]
+
+        cmd += cookies_arg
 
         result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode == 0:
-            log.info(f"  ✓ Download succeeded with client: {client}")
+            log.info(f"  ✓ Download succeeded with {label}")
             return result
 
-        log.warning(f"  Client '{client}' failed: {result.stderr[:80].strip()}")
+        log.warning(f"  {label} failed: {result.stderr[:100].strip()}")
 
     return result  # return last failed result
 
@@ -73,16 +82,17 @@ def process_audio(video_id: str, title: str, artist: str, temp_dir: str) -> str:
         log.info(f"  Cookies loaded: {COOKIES_PATH.stat().st_size} bytes")
         cookies_arg = ["--cookies", str(COOKIES_PATH)]
     else:
-        log.warning("  Cookies missing or too small — trying without cookies")
+        log.warning("  Cookies missing — trying without")
         cookies_arg = []
 
-    # Download with fallback clients
+    # Download
     log.info(f"  Downloading audio for video_id={video_id}...")
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    result = _try_download(url, raw, cookies_arg)
+    result = _try_download(
+        f"https://www.youtube.com/watch?v={video_id}", raw, cookies_arg
+    )
 
     if result.returncode != 0:
-        raise RuntimeError(f"yt-dlp failed on all clients: {result.stderr}")
+        raise RuntimeError(f"yt-dlp failed on all attempts: {result.stderr}")
 
     # Find downloaded file
     downloaded = list(temp.glob(f"{video_id}_raw.*"))
