@@ -1,6 +1,7 @@
 """
 process_audio.py
 Downloads audio with yt-dlp then applies slowed + reverb effects.
+Tries multiple player clients to bypass bot detection.
 """
 
 import os
@@ -20,9 +21,46 @@ SLOW_FACTOR = 0.80
 REVERB_ROOM = 0.75
 REVERB_WET  = 0.35
 TARGET_LUFS = -14.0
-
-# Cookies file written by the workflow step
 COOKIES_PATH = Path("/tmp/yt_cookies.txt")
+
+
+def _try_download(url: str, raw: Path, cookies_arg: list) -> subprocess.CompletedProcess:
+    """Try downloading with multiple player clients until one works."""
+    player_clients = [
+        "web",
+        "ios",
+        "tv_embedded",
+        "mweb",
+        "android",
+    ]
+
+    for client in player_clients:
+        log.info(f"  Trying player client: {client}...")
+        cmd = [
+            "yt-dlp",
+            url,
+            "-x",
+            "--audio-format", "mp3",
+            "--audio-quality", "0",
+            "-f", "bestaudio/best",
+            "-o", str(raw),
+            "--no-playlist",
+            "--quiet",
+            "--no-warnings",
+            "--geo-bypass",
+            "--extractor-args", f"youtube:player_client={client}",
+            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        ] + cookies_arg
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            log.info(f"  ✓ Download succeeded with client: {client}")
+            return result
+
+        log.warning(f"  Client '{client}' failed: {result.stderr[:80].strip()}")
+
+    return result  # return last failed result
 
 
 def process_audio(video_id: str, title: str, artist: str, temp_dir: str) -> str:
@@ -31,34 +69,20 @@ def process_audio(video_id: str, title: str, artist: str, temp_dir: str) -> str:
     out  = temp / f"{video_id}_slowed_reverb.mp3"
 
     # Check cookies
-    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 100:
-        log.info(f"  Cookies found: {COOKIES_PATH.stat().st_size} bytes")
+    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 500:
+        log.info(f"  Cookies loaded: {COOKIES_PATH.stat().st_size} bytes")
         cookies_arg = ["--cookies", str(COOKIES_PATH)]
     else:
-        log.warning("  No cookies found — download may fail on GitHub Actions")
+        log.warning("  Cookies missing or too small — trying without cookies")
         cookies_arg = []
 
-    # Download
+    # Download with fallback clients
     log.info(f"  Downloading audio for video_id={video_id}...")
-    cmd = [
-        "yt-dlp",
-        f"https://www.youtube.com/watch?v={video_id}",
-        "-x",
-        "--audio-format", "mp3",
-        "--audio-quality", "0",
-        "-f", "bestaudio/best",
-        "-o", str(raw),
-        "--no-playlist",
-        "--quiet",
-        "--no-warnings",
-        "--geo-bypass",
-        "--extractor-args", "youtube:player_client=web,ios",
-        "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    ] + cookies_arg
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    result = _try_download(url, raw, cookies_arg)
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(f"yt-dlp failed: {result.stderr}")
+        raise RuntimeError(f"yt-dlp failed on all clients: {result.stderr}")
 
     # Find downloaded file
     downloaded = list(temp.glob(f"{video_id}_raw.*"))
