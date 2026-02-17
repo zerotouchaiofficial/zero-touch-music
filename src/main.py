@@ -1,7 +1,5 @@
 """
-Main orchestrator for the YouTube Auto-Uploader.
-Fetches trending songs, processes audio (slowed+reverb),
-creates video with thumbnail, and uploads to YouTube.
+main.py - Pipeline orchestrator. Tries multiple songs until one succeeds.
 """
 
 import os
@@ -11,18 +9,16 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 
-# Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fetch_trending import get_trending_song
-from process_audio import process_audio
+from fetch_trending import get_trending_songs, mark_uploaded
+from process_audio import process_audio, DownloadError
 from create_video import create_video
 from generate_thumbnail import generate_thumbnail
 from upload_youtube import upload_to_youtube
 from seo_generator import generate_seo_metadata
 from utils import cleanup_temp_files, setup_logging
 
-# ─── Config ────────────────────────────────────────────────────────────────────
 CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "LoFi Aura")
 OUTPUT_DIR   = Path("output")
 TEMP_DIR     = Path("temp")
@@ -37,28 +33,49 @@ def run_pipeline():
     log.info(f"🎵 YT Auto-Uploader started at {datetime.utcnow().isoformat()}")
     log.info("=" * 60)
 
+    # ── Step 1: Get candidate songs ──────────────────────────────────
+    log.info("📡 Step 1: Fetching trending songs...")
+    candidates = get_trending_songs(max_candidates=10)
+    if not candidates:
+        log.error("No trending songs found. Exiting.")
+        sys.exit(1)
+
+    # ── Try each candidate until one works ───────────────────────────
+    song            = None
+    processed_audio = None
+
+    for i, candidate in enumerate(candidates):
+        log.info(f"\n🎵 Trying song {i+1}/{len(candidates)}: '{candidate['title']}' by {candidate['artist']} (id={candidate['video_id']})")
+
+        try:
+            log.info("🎧 Step 2: Processing audio (slowed+reverb)...")
+            processed_audio = process_audio(
+                video_id=candidate["video_id"],
+                title=candidate["title"],
+                artist=candidate["artist"],
+                temp_dir=str(TEMP_DIR),
+            )
+            song = candidate
+            log.info(f"✅ Audio processed successfully!")
+            break
+
+        except DownloadError as e:
+            log.warning(f"⏭️  Download failed for '{candidate['title']}': {e} — trying next song...")
+            cleanup_temp_files(str(TEMP_DIR))
+            continue
+
+        except Exception as e:
+            log.warning(f"⏭️  Unexpected error for '{candidate['title']}': {e} — trying next song...")
+            cleanup_temp_files(str(TEMP_DIR))
+            continue
+
+    if not song or not processed_audio:
+        log.error("❌ All candidate songs failed to download. Exiting.")
+        sys.exit(1)
+
     try:
-        # ── Step 1: Fetch trending song ──────────────────────────────
-        log.info("📡 Step 1: Fetching trending song...")
-        song = get_trending_song()
-        if not song:
-            log.error("No trending song found. Exiting.")
-            sys.exit(1)
-
-        log.info(f"✅ Found: '{song['title']}' by {song['artist']}")
-
-        # ── Step 2: Process audio (slowed + reverb) ──────────────────
-        log.info("🎧 Step 2: Processing audio (slowed+reverb)...")
-        processed_audio = process_audio(
-            video_id=song["video_id"],
-            title=song["title"],
-            artist=song["artist"],
-            temp_dir=str(TEMP_DIR),
-        )
-        log.info(f"✅ Audio processed: {processed_audio}")
-
-        # ── Step 3: Generate SEO metadata ────────────────────────────
-        log.info("📝 Step 3: Generating SEO metadata...")
+        # ── Step 3: SEO metadata ─────────────────────────────────────
+        log.info("\n📝 Step 3: Generating SEO metadata...")
         metadata = generate_seo_metadata(
             song_title=song["title"],
             artist=song["artist"],
@@ -67,8 +84,8 @@ def run_pipeline():
         )
         log.info(f"✅ Title: {metadata['title']}")
 
-        # ── Step 4: Create video ─────────────────────────────────────
-        log.info("🎬 Step 4: Creating video...")
+        # ── Step 4: Create video ──────────────────────────────────────
+        log.info("\n🎬 Step 4: Creating video...")
         video_path = create_video(
             audio_path=processed_audio,
             song_title=song["title"],
@@ -77,10 +94,10 @@ def run_pipeline():
             output_dir=str(OUTPUT_DIR),
             temp_dir=str(TEMP_DIR),
         )
-        log.info(f"✅ Video created: {video_path}")
+        log.info(f"✅ Video: {video_path}")
 
-        # ── Step 5: Generate thumbnail ───────────────────────────────
-        log.info("🖼️  Step 5: Generating thumbnail...")
+        # ── Step 5: Thumbnail ─────────────────────────────────────────
+        log.info("\n🖼️  Step 5: Generating thumbnail...")
         thumbnail_path = generate_thumbnail(
             song_title=song["title"],
             artist=song["artist"],
@@ -89,8 +106,8 @@ def run_pipeline():
         )
         log.info(f"✅ Thumbnail: {thumbnail_path}")
 
-        # ── Step 6: Upload to YouTube ────────────────────────────────
-        log.info("🚀 Step 6: Uploading to YouTube...")
+        # ── Step 6: Upload ────────────────────────────────────────────
+        log.info("\n🚀 Step 6: Uploading to YouTube...")
         video_url = upload_to_youtube(
             video_path=video_path,
             thumbnail_path=thumbnail_path,
@@ -100,12 +117,14 @@ def run_pipeline():
         )
         log.info(f"✅ Uploaded! → {video_url}")
 
-        # ── Step 7: Cleanup ──────────────────────────────────────────
-        log.info("🧹 Step 7: Cleaning up temp files...")
+        # Mark as uploaded only after successful upload
+        mark_uploaded(song["video_id"])
+
+        # ── Step 7: Cleanup ───────────────────────────────────────────
+        log.info("\n🧹 Step 7: Cleaning up...")
         cleanup_temp_files(str(TEMP_DIR))
 
-        log.info("🎉 Pipeline complete!")
-        return True
+        log.info("\n🎉 Pipeline complete!")
 
     except Exception as e:
         log.error(f"❌ Pipeline failed: {e}")
