@@ -1,6 +1,5 @@
 """
-fetch_trending.py
-WITH DEBUG LOGGING to trace upload_history.txt writes.
+fetch_trending.py - BULLETPROOF version with absolute paths
 """
 
 import os
@@ -13,38 +12,44 @@ from googleapiclient.discovery import build
 
 log = logging.getLogger("yt-uploader")
 
-UPLOADED_LOG = Path("output/uploaded.json")
-HISTORY_LOG  = Path("output/upload_history.txt")
-LANGUAGE_LOG = Path("output/last_language.json")
+# Use absolute paths from repo root
+REPO_ROOT = Path(__file__).parent.parent
+UPLOADED_LOG = REPO_ROOT / "output" / "uploaded.json"
+HISTORY_LOG  = REPO_ROOT / "output" / "upload_history.txt"
+LANGUAGE_LOG = REPO_ROOT / "output" / "last_language.json"
 
 BLOCKLIST = {"c5aYTMnACfk", "1FVF-9KQiPo"}
 
 SEARCH_QUERIES_BY_LANGUAGE = {
-    "english": ["trending english songs 2025", "top english hits 2025"],
-    "hindi": ["trending hindi songs 2025", "top bollywood songs 2025"],
-    "punjabi": ["trending punjabi songs 2025", "top punjabi hits 2025"],
-    "haryanvi": ["trending haryanvi songs 2025", "top haryanvi hits 2025"],
+    "english": ["trending english songs 2025"],
+    "hindi": ["trending hindi songs 2025"],
+    "punjabi": ["trending punjabi songs 2025"],
+    "haryanvi": ["trending haryanvi songs 2025"],
 }
 
 LANGUAGE_ROTATION = ["english", "hindi", "punjabi", "haryanvi"]
 
 
 def _load_uploaded() -> set:
+    """Load uploaded video IDs from JSON."""
     if UPLOADED_LOG.exists():
         try:
             with open(UPLOADED_LOG) as f:
                 data = json.load(f)
-                log.info(f"  📊 {len(data)} songs already uploaded")
+                print(f"📊 Loaded {len(data)} uploaded songs from {UPLOADED_LOG}")
                 return set(data)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ Failed to load uploaded.json: {e}")
+    print(f"📊 No upload history found at {UPLOADED_LOG}")
     return set()
 
 
 def _save_uploaded(video_ids: set):
-    UPLOADED_LOG.parent.mkdir(exist_ok=True)
+    """Save uploaded video IDs to JSON."""
+    UPLOADED_LOG.parent.mkdir(exist_ok=True, parents=True)
     with open(UPLOADED_LOG, "w") as f:
         json.dump(sorted(list(video_ids)), f, indent=2)
+    print(f"💾 Saved {len(video_ids)} IDs to {UPLOADED_LOG}")
 
 
 def _get_next_language() -> str:
@@ -64,7 +69,7 @@ def _get_next_language() -> str:
     except ValueError:
         next_lang = "english"
 
-    LANGUAGE_LOG.parent.mkdir(exist_ok=True)
+    LANGUAGE_LOG.parent.mkdir(exist_ok=True, parents=True)
     with open(LANGUAGE_LOG, "w") as f:
         json.dump({"language": next_lang}, f)
 
@@ -91,10 +96,11 @@ def get_trending_songs(max_candidates: int = 10) -> list:
     candidates = []
 
     language = _get_next_language()
-    queries  = SEARCH_QUERIES_BY_LANGUAGE[language]
-    query    = random.choice(queries)
+    queries = SEARCH_QUERIES_BY_LANGUAGE[language]
+    query = random.choice(queries)
 
-    log.info(f"  Language: {language.upper()} | Query: '{query}'")
+    print(f"🔍 Language: {language.upper()} | Query: '{query}'")
+    print(f"🔍 Will skip {len(skip)} already-uploaded songs")
 
     region = "IN" if language in ["hindi", "punjabi", "haryanvi"] else "US"
 
@@ -110,6 +116,7 @@ def get_trending_songs(max_candidates: int = 10) -> list:
         for item in resp.get("items", []):
             vid_id = item["id"]
             if vid_id in skip:
+                print(f"  ⏭️ Skipping {vid_id} (already uploaded)")
                 continue
             secs = _parse_duration(item["contentDetails"].get("duration", "PT0S"))
             if not (60 <= secs <= 480):
@@ -117,14 +124,14 @@ def get_trending_songs(max_candidates: int = 10) -> list:
             snippet = item["snippet"]
             candidates.append({
                 "video_id": vid_id,
-                "title":    _clean_title(snippet.get("title", "Unknown")),
-                "artist":   _clean_artist(snippet.get("channelTitle", "Unknown")),
+                "title": _clean_title(snippet.get("title", "Unknown")),
+                "artist": _clean_artist(snippet.get("channelTitle", "Unknown")),
                 "duration": secs,
             })
             if len(candidates) >= max_candidates:
                 break
     except Exception as e:
-        log.warning(f"Chart failed: {e}")
+        print(f"⚠️ Chart failed: {e}")
 
     if len(candidates) < max_candidates:
         try:
@@ -142,12 +149,13 @@ def get_trending_songs(max_candidates: int = 10) -> list:
             for item in resp.get("items", []):
                 vid_id = item["id"]["videoId"]
                 if vid_id in skip:
+                    print(f"  ⏭️ Skipping {vid_id} (already uploaded)")
                     continue
                 snippet = item["snippet"]
                 candidates.append({
                     "video_id": vid_id,
-                    "title":    _clean_title(snippet.get("title", "Unknown")),
-                    "artist":   _clean_artist(snippet.get("channelTitle", "Unknown")),
+                    "title": _clean_title(snippet.get("title", "Unknown")),
+                    "artist": _clean_artist(snippet.get("channelTitle", "Unknown")),
                     "duration": 180,
                 })
                 if len(candidates) >= max_candidates:
@@ -155,33 +163,38 @@ def get_trending_songs(max_candidates: int = 10) -> list:
         except Exception:
             pass
 
-    log.info(f"  ✅ Found {len(candidates)} {language} songs")
+    print(f"✅ Found {len(candidates)} new {language} songs")
     return candidates
 
 
 def mark_uploaded(video_id: str, title: str = "", artist: str = "", youtube_url: str = ""):
-    """Mark song as uploaded - prevents duplicates forever."""
+    """CRITICAL: Mark song as uploaded to prevent duplicates."""
     
     print("\n" + "="*70)
-    print("🔍 DEBUG: mark_uploaded() called")
-    print(f"   video_id: {video_id}")
-    print(f"   title: {title}")
-    print(f"   artist: {artist}")
-    print(f"   url: {youtube_url}")
+    print("🔒 MARKING AS UPLOADED")
+    print(f"   Video ID: {video_id}")
+    print(f"   Title: {title}")
+    print(f"   Artist: {artist}")
     print("="*70)
     
     # Update JSON
     uploaded = _load_uploaded()
     uploaded.add(video_id)
     _save_uploaded(uploaded)
-    print(f"✅ DEBUG: Saved to uploaded.json (total: {len(uploaded)})")
     
-    # Update history file
+    # Verify it was saved
+    verify = _load_uploaded()
+    if video_id in verify:
+        print(f"✅ VERIFIED: {video_id} is now in uploaded.json")
+    else:
+        print(f"❌ ERROR: {video_id} was NOT saved properly!")
+    
+    # Update history
     HISTORY_LOG.parent.mkdir(exist_ok=True, parents=True)
     language = get_current_language()
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     
-    history_entry = f"""
+    entry = f"""
 {'='*70}
 Uploaded: {timestamp}
 Language: {language.upper()}
@@ -192,27 +205,12 @@ URL:      {youtube_url}
 {'='*70}
 """
     
-    print(f"📝 DEBUG: Writing to {HISTORY_LOG.absolute()}")
-    print(f"   History entry:\n{history_entry}")
+    with open(HISTORY_LOG, "a", encoding="utf-8") as f:
+        f.write(entry)
     
-    try:
-        with open(HISTORY_LOG, "a", encoding="utf-8") as f:
-            f.write(history_entry)
-        print(f"✅ DEBUG: Successfully wrote to {HISTORY_LOG}")
-        print(f"   File exists: {HISTORY_LOG.exists()}")
-        print(f"   File size: {HISTORY_LOG.stat().st_size} bytes")
-        
-        # Read back to verify
-        with open(HISTORY_LOG, "r", encoding="utf-8") as f:
-            content = f.read()
-            print(f"   Lines in file: {len(content.splitlines())}")
-            
-    except Exception as e:
-        print(f"❌ DEBUG: Failed to write: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    log.info(f"  ✅ Saved to history (total uploads: {len(uploaded)})")
+    print(f"✅ Appended to {HISTORY_LOG}")
+    print(f"   Total uploads: {len(uploaded)}")
+    print("="*70 + "\n")
 
 
 def _parse_duration(iso: str) -> int:
