@@ -1,6 +1,6 @@
 """
 fetch_trending.py
-Simple duplicate prevention with both JSON and readable history.
+WITH DEBUG LOGGING to trace upload_history.txt writes.
 """
 
 import os
@@ -20,26 +20,10 @@ LANGUAGE_LOG = Path("output/last_language.json")
 BLOCKLIST = {"c5aYTMnACfk", "1FVF-9KQiPo"}
 
 SEARCH_QUERIES_BY_LANGUAGE = {
-    "english": [
-        "trending english songs 2025",
-        "top english hits 2025",
-        "viral english songs 2025",
-    ],
-    "hindi": [
-        "trending hindi songs 2025",
-        "top bollywood songs 2025",
-        "viral hindi music 2025",
-    ],
-    "punjabi": [
-        "trending punjabi songs 2025",
-        "top punjabi hits 2025",
-        "viral punjabi music 2025",
-    ],
-    "haryanvi": [
-        "trending haryanvi songs 2025",
-        "top haryanvi hits 2025",
-        "viral haryanvi music 2025",
-    ],
+    "english": ["trending english songs 2025", "top english hits 2025"],
+    "hindi": ["trending hindi songs 2025", "top bollywood songs 2025"],
+    "punjabi": ["trending punjabi songs 2025", "top punjabi hits 2025"],
+    "haryanvi": ["trending haryanvi songs 2025", "top haryanvi hits 2025"],
 }
 
 LANGUAGE_ROTATION = ["english", "hindi", "punjabi", "haryanvi"]
@@ -176,26 +160,57 @@ def get_trending_songs(max_candidates: int = 10) -> list:
 
 
 def mark_uploaded(video_id: str, title: str = "", artist: str = "", youtube_url: str = ""):
-    """Mark song as uploaded - prevents duplicates."""
+    """Mark song as uploaded - prevents duplicates forever."""
+    
+    print("\n" + "="*70)
+    print("🔍 DEBUG: mark_uploaded() called")
+    print(f"   video_id: {video_id}")
+    print(f"   title: {title}")
+    print(f"   artist: {artist}")
+    print(f"   url: {youtube_url}")
+    print("="*70)
+    
     # Update JSON
     uploaded = _load_uploaded()
     uploaded.add(video_id)
     _save_uploaded(uploaded)
+    print(f"✅ DEBUG: Saved to uploaded.json (total: {len(uploaded)})")
     
     # Update history file
-    HISTORY_LOG.parent.mkdir(exist_ok=True)
+    HISTORY_LOG.parent.mkdir(exist_ok=True, parents=True)
     language = get_current_language()
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     
-    with open(HISTORY_LOG, "a", encoding="utf-8") as f:
-        f.write(f"\n{'='*70}\n")
-        f.write(f"Uploaded: {timestamp}\n")
-        f.write(f"Language: {language.upper()}\n")
-        f.write(f"Title:    {title}\n")
-        f.write(f"Artist:   {artist}\n")
-        f.write(f"Video ID: {video_id}\n")
-        f.write(f"URL:      {youtube_url}\n")
-        f.write(f"{'='*70}\n")
+    history_entry = f"""
+{'='*70}
+Uploaded: {timestamp}
+Language: {language.upper()}
+Title:    {title}
+Artist:   {artist}
+Video ID: {video_id}
+URL:      {youtube_url}
+{'='*70}
+"""
+    
+    print(f"📝 DEBUG: Writing to {HISTORY_LOG.absolute()}")
+    print(f"   History entry:\n{history_entry}")
+    
+    try:
+        with open(HISTORY_LOG, "a", encoding="utf-8") as f:
+            f.write(history_entry)
+        print(f"✅ DEBUG: Successfully wrote to {HISTORY_LOG}")
+        print(f"   File exists: {HISTORY_LOG.exists()}")
+        print(f"   File size: {HISTORY_LOG.stat().st_size} bytes")
+        
+        # Read back to verify
+        with open(HISTORY_LOG, "r", encoding="utf-8") as f:
+            content = f.read()
+            print(f"   Lines in file: {len(content.splitlines())}")
+            
+    except Exception as e:
+        print(f"❌ DEBUG: Failed to write: {e}")
+        import traceback
+        traceback.print_exc()
     
     log.info(f"  ✅ Saved to history (total uploads: {len(uploaded)})")
 
