@@ -2,11 +2,10 @@ name: 🎵 Auto Upload Slowed+Reverb
 
 on:
   schedule:
-    - cron: "0 6  * * *"
-    - cron: "0 10 * * *"
-    - cron: "0 14 * * *"
-    - cron: "0 18 * * *"
-    - cron: "0 22 * * *"
+    # REDUCED TO 3x DAILY to stay under YouTube quota
+    - cron: "0 6  * * *"   # 6 AM UTC
+    - cron: "0 14 * * *"   # 2 PM UTC  
+    - cron: "0 22 * * *"   # 10 PM UTC
   workflow_dispatch:
     inputs:
       privacy:
@@ -30,8 +29,6 @@ jobs:
         with:
           token: ${{ secrets.GH_PAT }}
 
-      # NO CACHE - cache was overwriting uploaded.json!
-
       - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
@@ -52,13 +49,15 @@ jobs:
         run: |
           mkdir -p output temp
           
-          # Create uploaded.json if missing
-          if [ ! -f "output/uploaded.json" ]; then
+          # Fix uploaded.json if corrupted
+          if [ -f "output/uploaded.json" ]; then
+            if ! jq empty output/uploaded.json 2>/dev/null; then
+              echo "⚠️ uploaded.json corrupted, resetting..."
+              echo "[]" > output/uploaded.json
+            fi
+          else
             echo "[]" > output/uploaded.json
           fi
-          
-          echo "Before pipeline:"
-          cat output/uploaded.json | jq '. | length' || echo "0"
 
       - name: 🎵 Run pipeline
         env:
@@ -73,28 +72,13 @@ jobs:
           cd src
           python main.py
 
-      - name: 🔍 Check results
-        if: always()
-        run: |
-          echo "========== AFTER PIPELINE =========="
-          echo "uploaded.json:"
-          cat output/uploaded.json | jq '.' || cat output/uploaded.json
-          echo ""
-          echo "upload_history.txt:"
-          cat output/upload_history.txt || echo "MISSING!"
-
-      - name: 💾 Force commit
+      - name: 💾 Commit
         if: always()
         run: |
           git config user.name "yt-bot"
           git config user.email "bot@example.com"
-          
-          # Stage everything in output/
           git add output/*.json output/*.txt 2>/dev/null || true
-          
-          if git diff --staged --quiet; then
-            echo "No changes"
-          else
+          if ! git diff --staged --quiet; then
             git commit -m "Update logs [skip ci]"
             git push
           fi
