@@ -1,5 +1,5 @@
 """
-main.py - Pipeline with duplicate tracking.
+main.py - BULLETPROOF version that ensures mark_uploaded is called
 """
 
 import os
@@ -39,11 +39,6 @@ def run_pipeline():
     candidates = get_trending_songs(max_candidates=10)
     if not candidates:
         log.error("No trending songs found.")
-        send_discord_notification(
-            title="⚠️ No Songs Found",
-            description=f"No {language} songs available.",
-            color=16776960
-        )
         sys.exit(1)
 
     song = None
@@ -76,13 +71,10 @@ def run_pipeline():
 
     if not song or not processed_audio:
         log.error("❌ All songs failed.")
-        send_discord_notification(
-            title="❌ All Failed",
-            description=f"Tried {len(candidates)} songs.",
-            color=15158332
-        )
         sys.exit(1)
 
+    video_url = None
+    
     try:
         log.info("\n📝 Generating SEO...")
         metadata = generate_seo_metadata(
@@ -121,34 +113,40 @@ def run_pipeline():
         )
         log.info(f"✅ Uploaded! → {video_url}")
 
-        # Mark as uploaded with full details
-        log.info("\n📝 Saving to history...")
+    except Exception as e:
+        log.error(f"❌ Upload failed: {e}")
+        log.error(traceback.format_exc())
+        sys.exit(1)
+    
+    # CRITICAL: Always mark as uploaded, even if notifications fail
+    try:
+        log.info("\n📝 CRITICAL: Marking song as uploaded...")
         mark_uploaded(
             video_id=song["video_id"],
             title=song["title"],
             artist=song["artist"],
-            youtube_url=video_url,
+            youtube_url=video_url or "unknown",
         )
-
+        log.info("✅ Song marked as uploaded successfully!")
+        
+    except Exception as e:
+        log.error(f"❌ CRITICAL ERROR marking as uploaded: {e}")
+        log.error(traceback.format_exc())
+        # Still try to notify even if marking failed
+    
+    # Notifications (non-critical, can fail)
+    try:
         send_discord_notification(
             title=f"✅ Upload Complete ({language.upper()})",
             description=f"**{song['title']}** by {song['artist']}\n[Watch]({video_url})",
             color=5763719
         )
+    except Exception:
+        pass
 
-        log.info("\n🧹 Cleaning up...")
-        cleanup_temp_files(str(TEMP_DIR))
-        log.info("\n🎉 Complete!")
-
-    except Exception as e:
-        log.error(f"❌ Failed: {e}")
-        log.error(traceback.format_exc())
-        send_discord_notification(
-            title="❌ Pipeline Error",
-            description=str(e)[:200],
-            color=15158332
-        )
-        sys.exit(1)
+    log.info("\n🧹 Cleaning up...")
+    cleanup_temp_files(str(TEMP_DIR))
+    log.info("\n🎉 Complete!")
 
 
 if __name__ == "__main__":
