@@ -1,5 +1,5 @@
 """
-main.py - Handles YouTube quota gracefully
+main.py - Uses correct language from fetch_trending
 """
 
 import os
@@ -11,7 +11,7 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fetch_trending import get_trending_songs, mark_uploaded, get_current_language
+from fetch_trending import get_trending_songs, mark_uploaded
 from process_audio import process_audio, DownloadError
 from create_video import create_video
 from generate_thumbnail import generate_thumbnail
@@ -33,13 +33,14 @@ def run_pipeline():
     log.info(f"🎵 YT Auto-Uploader started at {datetime.utcnow().isoformat()}")
     log.info("=" * 60)
 
-    language = get_current_language()
-
     log.info("📡 Step 1: Fetching trending songs...")
-    candidates = get_trending_songs(max_candidates=10)
+    candidates, language = get_trending_songs(max_candidates=10)  # Now returns language!
+    
     if not candidates:
         log.error("No trending songs found.")
         sys.exit(1)
+
+    log.info(f"🌍 Language for this upload: {language.upper()}")
 
     song = None
     processed_audio = None
@@ -115,16 +116,13 @@ def run_pipeline():
 
     except QuotaExceededError as e:
         log.warning("⏸️  YouTube quota exceeded for today!")
-        log.warning("   Video files saved - will upload tomorrow")
         send_discord_notification(
             title="⏸️  Daily Quota Reached",
             description=f"YouTube upload limit hit. Video saved for tomorrow.\n**{song['title']}** by {song['artist']}",
-            color=16776960  # yellow
+            color=16776960
         )
-        # DON'T mark as uploaded - will retry tomorrow
-        log.info("\n🧹 Cleaning up...")
         cleanup_temp_files(str(TEMP_DIR))
-        sys.exit(0)  # Exit gracefully, not an error
+        sys.exit(0)
         
     except Exception as e:
         log.error(f"❌ Upload failed: {e}")
@@ -136,7 +134,7 @@ def run_pipeline():
         )
         sys.exit(1)
     
-    # Only mark as uploaded if upload succeeded
+    # Mark as uploaded with CORRECT language
     try:
         log.info("\n📝 Marking song as uploaded...")
         mark_uploaded(
@@ -144,15 +142,17 @@ def run_pipeline():
             title=song["title"],
             artist=song["artist"],
             youtube_url=video_url,
+            language=language,  # Pass the correct language
         )
         log.info("✅ Song marked!")
         
     except Exception as e:
         log.error(f"❌ Error marking: {e}")
     
+    # Discord notification with CORRECT language
     try:
         send_discord_notification(
-            title=f"✅ Upload Complete ({language.upper()})",
+            title=f"✅ Upload Complete ({language.upper()})",  # Correct language here!
             description=f"**{song['title']}** by {song['artist']}\n[Watch]({video_url})",
             color=5763719
         )
