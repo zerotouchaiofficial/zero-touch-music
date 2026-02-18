@@ -1,5 +1,5 @@
 """
-main.py - Pipeline orchestrator. Tries multiple songs until one succeeds.
+main.py - Pipeline orchestrator with language tracking and Discord notifications.
 """
 
 import os
@@ -11,13 +11,13 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fetch_trending import get_trending_songs, mark_uploaded
+from fetch_trending import get_trending_songs, mark_uploaded, get_current_language
 from process_audio import process_audio, DownloadError
 from create_video import create_video
 from generate_thumbnail import generate_thumbnail
 from upload_youtube import upload_to_youtube
 from seo_generator import generate_seo_metadata
-from utils import cleanup_temp_files, setup_logging
+from utils import cleanup_temp_files, setup_logging, send_discord_notification
 
 CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "LoFi Aura")
 OUTPUT_DIR   = Path("output")
@@ -33,11 +33,19 @@ def run_pipeline():
     log.info(f"🎵 YT Auto-Uploader started at {datetime.utcnow().isoformat()}")
     log.info("=" * 60)
 
+    # Get current language for this run
+    language = get_current_language()
+
     # ── Step 1: Get candidate songs ──────────────────────────────────
     log.info("📡 Step 1: Fetching trending songs...")
     candidates = get_trending_songs(max_candidates=10)
     if not candidates:
         log.error("No trending songs found. Exiting.")
+        send_discord_notification(
+            title="⚠️ No Songs Found",
+            description=f"No {language} trending songs available.",
+            color=16776960  # yellow
+        )
         sys.exit(1)
 
     # ── Try each candidate until one works ───────────────────────────
@@ -71,6 +79,11 @@ def run_pipeline():
 
     if not song or not processed_audio:
         log.error("❌ All candidate songs failed to download. Exiting.")
+        send_discord_notification(
+            title="❌ All Downloads Failed",
+            description=f"Tried {len(candidates)} {language} songs, all failed.",
+            color=15158332  # red
+        )
         sys.exit(1)
 
     try:
@@ -114,11 +127,19 @@ def run_pipeline():
             title=metadata["title"],
             description=metadata["description"],
             tags=metadata["tags"],
+            language=language,
         )
         log.info(f"✅ Uploaded! → {video_url}")
 
-        # Mark as uploaded only after successful upload
+        # Mark as uploaded
         mark_uploaded(song["video_id"])
+
+        # ── Success notification ──────────────────────────────────────
+        send_discord_notification(
+            title=f"✅ Upload Complete ({language.upper()})",
+            description=f"**{song['title']}** by {song['artist']}\n[Watch on YouTube]({video_url})",
+            color=5763719  # green
+        )
 
         # ── Step 7: Cleanup ───────────────────────────────────────────
         log.info("\n🧹 Step 7: Cleaning up...")
@@ -129,6 +150,11 @@ def run_pipeline():
     except Exception as e:
         log.error(f"❌ Pipeline failed: {e}")
         log.error(traceback.format_exc())
+        send_discord_notification(
+            title="❌ Pipeline Error",
+            description=f"Failed during processing: {str(e)[:200]}",
+            color=15158332  # red
+        )
         sys.exit(1)
 
 
