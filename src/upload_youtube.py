@@ -1,14 +1,12 @@
 """
 upload_youtube.py
-Uploads the processed video + thumbnail to YouTube via the Data API v3.
-Uses OAuth2 credentials stored as GitHub Secrets.
+Uploads video to YouTube and auto-organizes into language-specific playlists.
 """
 
 import os
 import json
 import time
 import logging
-import tempfile
 from pathlib import Path
 
 from google.oauth2.credentials import Credentials
@@ -24,20 +22,23 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube",
 ]
 
-# Category IDs
 CATEGORY_MUSIC = "10"
-
-# Privacy: "public", "unlisted", "private"
-# Start with "public" — change to "unlisted" for testing
 PRIVACY_STATUS = os.environ.get("VIDEO_PRIVACY", "public")
+
+# Playlist cache file
+PLAYLIST_CACHE = Path("output/playlists.json")
+
+# Playlist titles by language
+PLAYLIST_TITLES = {
+    "english":  "Slowed + Reverb | English Hits",
+    "hindi":    "Slowed + Reverb | Hindi Songs",
+    "punjabi":  "Slowed + Reverb | Punjabi Tracks",
+    "haryanvi": "Slowed + Reverb | Haryanvi Music",
+}
 
 
 def _get_credentials() -> Credentials:
-    """
-    Load credentials from environment variables (GitHub Secrets).
-    Expected env vars:
-      YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
-    """
+    """Load OAuth credentials from environment variables."""
     client_id     = os.environ["YT_CLIENT_ID"]
     client_secret = os.environ["YT_CLIENT_SECRET"]
     refresh_token = os.environ["YT_REFRESH_TOKEN"]
@@ -51,9 +52,100 @@ def _get_credentials() -> Credentials:
         scopes=SCOPES,
     )
 
-    # Force refresh to get a valid access token
     creds.refresh(Request())
     return creds
+
+
+def _load_playlist_cache() -> dict:
+    """Load cached playlist IDs."""
+    if PLAYLIST_CACHE.exists():
+        try:
+            with open(PLAYLIST_CACHE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_playlist_cache(cache: dict):
+    """Save playlist IDs to cache."""
+    PLAYLIST_CACHE.parent.mkdir(exist_ok=True)
+    with open(PLAYLIST_CACHE, "w") as f:
+        json.dump(cache, f)
+
+
+def _get_or_create_playlist(youtube, language: str) -> str:
+    """
+    Get existing playlist ID for language, or create if doesn't exist.
+    Returns playlist ID.
+    """
+    cache = _load_playlist_cache()
+
+    if language in cache:
+        # Verify playlist still exists
+        try:
+            youtube.playlists().list(
+                part="snippet",
+                id=cache[language]
+            ).execute()
+            log.info(f"  Using existing {language} playlist: {cache[language]}")
+            return cache[language]
+        except HttpError:
+            log.warning(f"  Cached playlist {cache[language]} not found, creating new...")
+
+    # Create new playlist
+    title = PLAYLIST_TITLES.get(language, f"Slowed + Reverb | {language.title()}")
+    description = f"All {language.title()} songs slowed to 80% with reverb. Perfect for studying, chilling, or late-night drives. New uploads daily!"
+
+    try:
+        response = youtube.playlists().insert(
+            part="snippet,status",
+            body={
+                "snippet": {
+                    "title": title,
+                    "description": description,
+                },
+                "status": {
+                    "privacyStatus": "public"
+                }
+            }
+        ).execute()
+
+        playlist_id = response["id"]
+        log.info(f"  ✓ Created new {language} playlist: {playlist_id}")
+
+        # Cache it
+        cache[language] = playlist_id
+        _save_playlist_cache(cache)
+
+        return playlist_id
+
+    except HttpError as e:
+        log.warning(f"  Failed to create playlist: {e}")
+        return None
+
+
+def _add_to_playlist(youtube, video_id: str, playlist_id: str):
+    """Add video to playlist."""
+    if not playlist_id:
+        return
+
+    try:
+        youtube.playlistItems().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {
+                        "kind": "youtube#video",
+                        "videoId": video_id
+                    }
+                }
+            }
+        ).execute()
+        log.info(f"  ✓ Added to playlist: {playlist_id}")
+    except HttpError as e:
+        log.warning(f"  Failed to add to playlist: {e}")
 
 
 def upload_to_youtube(
@@ -62,9 +154,10 @@ def upload_to_youtube(
     title: str,
     description: str,
     tags: list[str],
+    language: str = "english",
 ) -> str:
     """
-    Uploads video and sets thumbnail.
+    Uploads video, sets thumbnail, and adds to language playlist.
     Returns the public YouTube URL.
     """
     creds   = _get_credentials()
@@ -77,7 +170,7 @@ def upload_to_youtube(
         "snippet": {
             "title":       title[:100],
             "description": description,
-            "tags":        tags[:500],           # YT max tag count
+            "tags":        tags,
             "categoryId":  CATEGORY_MUSIC,
             "defaultLanguage": "en",
             "defaultAudioLanguage": "en",
@@ -93,7 +186,7 @@ def upload_to_youtube(
         video_path,
         mimetype="video/mp4",
         resumable=True,
-        chunksize=10 * 1024 * 1024,   # 10 MB chunks
+        chunksize=10 * 1024 * 1024,
     )
 
     request = youtube.videos().insert(
@@ -114,16 +207,18 @@ def upload_to_youtube(
         ).execute()
         log.info("  ✓ Thumbnail set!")
     except HttpError as e:
-        log.warning(f"  ⚠️  Thumbnail upload failed: {e} (continuing)")
+        log.warning(f"  ⚠️  Thumbnail upload failed: {e}")
+
+    # ── Add to playlist ──────────────────────────────────────────────
+    log.info(f"  Adding to {language} playlist...")
+    playlist_id = _get_or_create_playlist(youtube, language)
+    _add_to_playlist(youtube, video_id, playlist_id)
 
     return f"https://www.youtube.com/watch?v={video_id}"
 
 
 def _resumable_upload(request) -> str:
-    """
-    Execute a resumable upload with exponential backoff retry.
-    Returns the uploaded video ID.
-    """
+    """Execute resumable upload with retry."""
     response   = None
     error      = None
     retry      = 0
