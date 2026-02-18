@@ -80,14 +80,53 @@ jobs:
           cd src
           python main.py
 
+      - name: 🔍 Debug - Check output files
+        if: always()
+        run: |
+          echo "📂 Listing output directory:"
+          ls -lah output/ || echo "output/ doesn't exist"
+          echo ""
+          echo "📄 upload_history.txt status:"
+          if [ -f "output/upload_history.txt" ]; then
+            echo "✅ File exists"
+            echo "Size: $(stat -f%z output/upload_history.txt 2>/dev/null || stat -c%s output/upload_history.txt) bytes"
+            echo "Lines: $(wc -l < output/upload_history.txt)"
+            echo ""
+            echo "📖 Contents:"
+            cat output/upload_history.txt
+          else
+            echo "❌ File does NOT exist"
+          fi
+          echo ""
+          echo "📄 uploaded.json status:"
+          if [ -f "output/uploaded.json" ]; then
+            echo "✅ File exists"
+            cat output/uploaded.json
+          else
+            echo "❌ File does NOT exist"
+          fi
+
       - name: 💾 Commit upload logs
         if: always()
         run: |
           git config user.name  "yt-bot"
           git config user.email "yt-bot@github.com"
+          
+          echo "Files to commit:"
+          ls -la output/ || true
+          
           git add output/uploaded.json output/upload_history.txt output/last_language.json output/playlists.json || true
-          git diff --staged --quiet || git commit -m "📝 Update upload logs [skip ci]"
-          git push || true
+          
+          echo "Git status:"
+          git status
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            echo "Committing changes..."
+            git commit -m "📝 Update upload logs [skip ci]"
+            git push
+          fi
 
       - name: 📎 Upload artifacts
         if: always()
@@ -97,6 +136,8 @@ jobs:
           path: |
             output/*.mp4
             output/*.jpg
+            output/*.txt
+            output/*.json
           retention-days: 3
 
       - name: 🚨 Notify on failure
@@ -111,4 +152,4 @@ jobs:
                 "color": 15158332,
                 "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
               }]
-            }' || echo "Discord notification failed (webhook not set?)"
+            }' || echo "Discord notification failed"
