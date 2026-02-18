@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       privacy:
-        description: "Video privacy (public/unlisted/private)"
+        description: "Video privacy"
         required: false
         default: "public"
 
@@ -20,54 +20,47 @@ concurrency:
 
 jobs:
   upload:
-    name: 🚀 Fetch → Process → Upload
+    name: 🚀 Upload
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
-      - name: 📦 Checkout repository
+      - name: 📦 Checkout
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GH_PAT }}
 
-      - name: 📂 Restore uploaded songs cache
-        uses: actions/cache@v4
-        with:
-          path: output/uploaded.json
-          key: uploaded-songs-${{ github.run_number }}
-          restore-keys: |
-            uploaded-songs-
+      # NO CACHE - cache was overwriting uploaded.json!
 
-      - name: 🐍 Set up Python 3.11
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: 🔧 Install system dependencies
+      - name: 🔧 System deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            ffmpeg \
-            libsndfile1 \
-            fonts-dejavu-core \
-            libglib2.0-0 \
-            libsm6 \
-            libxext6 \
-            libxrender-dev \
-            libgomp1
-          sudo curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-            -o /usr/local/bin/yt-dlp
+          sudo apt-get install -y ffmpeg libsndfile1 fonts-dejavu-core jq
+          sudo curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod +x /usr/local/bin/yt-dlp
-          yt-dlp --version
 
-      - name: 📦 Install Python dependencies
+      - name: 📦 Python deps
         run: pip install -r requirements.txt
 
-      - name: 📁 Setup directories
-        run: mkdir -p output temp
+      - name: 📁 Init output dir
+        run: |
+          mkdir -p output temp
+          
+          # Create uploaded.json if missing
+          if [ ! -f "output/uploaded.json" ]; then
+            echo "[]" > output/uploaded.json
+          fi
+          
+          echo "Before pipeline:"
+          cat output/uploaded.json | jq '. | length' || echo "0"
 
-      - name: 🎵 Run upload pipeline
+      - name: 🎵 Run pipeline
         env:
           YOUTUBE_API_KEY:  ${{ secrets.YOUTUBE_API_KEY }}
           YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
@@ -80,76 +73,36 @@ jobs:
           cd src
           python main.py
 
-      - name: 🔍 Debug - Check output files
+      - name: 🔍 Check results
         if: always()
         run: |
-          echo "📂 Listing output directory:"
-          ls -lah output/ || echo "output/ doesn't exist"
+          echo "========== AFTER PIPELINE =========="
+          echo "uploaded.json:"
+          cat output/uploaded.json | jq '.' || cat output/uploaded.json
           echo ""
-          echo "📄 upload_history.txt status:"
-          if [ -f "output/upload_history.txt" ]; then
-            echo "✅ File exists"
-            echo "Size: $(stat -f%z output/upload_history.txt 2>/dev/null || stat -c%s output/upload_history.txt) bytes"
-            echo "Lines: $(wc -l < output/upload_history.txt)"
-            echo ""
-            echo "📖 Contents:"
-            cat output/upload_history.txt
-          else
-            echo "❌ File does NOT exist"
-          fi
-          echo ""
-          echo "📄 uploaded.json status:"
-          if [ -f "output/uploaded.json" ]; then
-            echo "✅ File exists"
-            cat output/uploaded.json
-          else
-            echo "❌ File does NOT exist"
-          fi
+          echo "upload_history.txt:"
+          cat output/upload_history.txt || echo "MISSING!"
 
-      - name: 💾 Commit upload logs
+      - name: 💾 Force commit
         if: always()
         run: |
-          git config user.name  "yt-bot"
-          git config user.email "yt-bot@github.com"
+          git config user.name "yt-bot"
+          git config user.email "bot@example.com"
           
-          echo "Files to commit:"
-          ls -la output/ || true
-          
-          git add output/uploaded.json output/upload_history.txt output/last_language.json output/playlists.json || true
-          
-          echo "Git status:"
-          git status
+          # Stage everything in output/
+          git add output/*.json output/*.txt 2>/dev/null || true
           
           if git diff --staged --quiet; then
-            echo "No changes to commit"
+            echo "No changes"
           else
-            echo "Committing changes..."
-            git commit -m "📝 Update upload logs [skip ci]"
+            git commit -m "Update logs [skip ci]"
             git push
           fi
 
-      - name: 📎 Upload artifacts
+      - name: 📎 Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: output-${{ github.run_number }}
-          path: |
-            output/*.mp4
-            output/*.jpg
-            output/*.txt
-            output/*.json
-          retention-days: 3
-
-      - name: 🚨 Notify on failure
-        if: failure()
-        run: |
-          curl -X POST "${{ secrets.DISCORD_WEBHOOK }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "embeds": [{
-                "title": "❌ YouTube Upload Failed",
-                "description": "Check the [Actions log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.",
-                "color": 15158332,
-                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
-              }]
-            }' || echo "Discord notification failed"
+          path: output/
+          retention-days: 7
