@@ -1,7 +1,6 @@
 """
 fetch_trending.py
 Rotates between English, Hindi, Punjabi, Haryanvi trending music.
-Returns list of candidates to try.
 """
 
 import os
@@ -15,10 +14,8 @@ log = logging.getLogger("yt-uploader")
 UPLOADED_LOG = Path("output/uploaded.json")
 LANGUAGE_LOG = Path("output/last_language.json")
 
-# Blocklist for problematic videos
 BLOCKLIST = {"c5aYTMnACfk", "1FVF-9KQiPo"}
 
-# Rotating language searches - cycles through these
 SEARCH_QUERIES_BY_LANGUAGE = {
     "english": [
         "trending english songs 2025",
@@ -67,7 +64,7 @@ def _save_uploaded(video_ids: set):
 
 
 def _get_next_language() -> str:
-    """Rotate through languages - returns next language to search."""
+    """Rotate through languages."""
     if LANGUAGE_LOG.exists():
         try:
             with open(LANGUAGE_LOG) as f:
@@ -78,14 +75,12 @@ def _get_next_language() -> str:
     else:
         last_lang = "english"
 
-    # Get next language in rotation
     try:
         idx = LANGUAGE_ROTATION.index(last_lang)
         next_lang = LANGUAGE_ROTATION[(idx + 1) % len(LANGUAGE_ROTATION)]
     except ValueError:
         next_lang = "english"
 
-    # Save for next time
     LANGUAGE_LOG.parent.mkdir(exist_ok=True)
     with open(LANGUAGE_LOG, "w") as f:
         json.dump({"language": next_lang}, f)
@@ -93,24 +88,31 @@ def _get_next_language() -> str:
     return next_lang
 
 
+def get_current_language() -> str:
+    """Get the language for this run (reads from file but doesn't advance rotation)."""
+    if LANGUAGE_LOG.exists():
+        try:
+            with open(LANGUAGE_LOG) as f:
+                return f.read().strip() or "english"
+        except Exception:
+            pass
+    return "english"
+
+
 def get_trending_songs(max_candidates: int = 10) -> list:
-    """
-    Returns list of trending songs from the next language in rotation.
-    """
+    """Returns list of trending songs from the next language in rotation."""
     api_key = os.environ["YOUTUBE_API_KEY"]
     youtube = build("youtube", "v3", developerKey=api_key)
     uploaded = _load_uploaded()
     skip = uploaded | BLOCKLIST
     candidates = []
 
-    # Get next language
     language = _get_next_language()
     queries  = SEARCH_QUERIES_BY_LANGUAGE[language]
     query    = random.choice(queries)
 
     log.info(f"  Language: {language.upper()} | Query: '{query}'")
 
-    # Try chart first (filtered by region if applicable)
     region_codes = {
         "english":  "US",
         "hindi":    "IN",
@@ -148,7 +150,6 @@ def get_trending_songs(max_candidates: int = 10) -> list:
     except Exception as e:
         log.warning(f"Chart lookup failed: {e}")
 
-    # Fill remaining from search
     if len(candidates) < max_candidates:
         try:
             resp = youtube.search().list(
