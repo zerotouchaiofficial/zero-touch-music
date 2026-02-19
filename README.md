@@ -3,7 +3,7 @@
 > Fully automated YouTube channel that fetches trending songs, applies
 > professional Slowed + Reverb audio effects, generates cinematic videos
 > with animated backgrounds, creates eye-catching thumbnails, and uploads
-> everything to YouTube — **5 times per day, zero human intervention.**
+> everything to YouTube — **3 times per day, zero human intervention.**
 
 ---
 
@@ -202,4 +202,14 @@ yt-auto-uploader/
 
 ---
 
+## ⚖️ Disclaimer
+
+- This tool is provided for educational and personal use only.
+- You are responsible for complying with YouTube’s Terms of Service, copyright laws, and all applicable local regulations.
+- Automated uploading of copyrighted content may lead to demonetization, copyright claims, or account penalties.
+- The creator (zerotouchai.official@gmail.com) is not liable for any misuse, legal issues, or damages resulting from the use of this software.
+- Always ensure you have proper rights or licenses for the content you upload.
+
+
 Made with ❤️ — fully automated, zero touch needed after setup.
+For queries or support, contact: zerotouchai.official@gmail.com
