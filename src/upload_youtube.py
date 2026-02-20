@@ -1,6 +1,6 @@
 """
 upload_youtube.py
-Uploads with quota detection
+Uploads with quota detection and exposes YouTube service
 """
 
 import os
@@ -20,6 +20,7 @@ log = logging.getLogger("yt-uploader")
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
 
 CATEGORY_MUSIC = "10"
@@ -35,8 +36,13 @@ PLAYLIST_TITLES = {
 
 
 class QuotaExceededError(Exception):
-    """Raised when daily YouTube upload quota is exceeded."""
     pass
+
+
+def get_youtube_service():
+    """Returns authenticated YouTube service. Used by copyright checker."""
+    creds = _get_credentials()
+    return build("youtube", "v3", credentials=creds)
 
 
 def _get_credentials() -> Credentials:
@@ -79,13 +85,12 @@ def _get_or_create_playlist(youtube, language: str) -> str:
     if language in cache:
         try:
             youtube.playlists().list(part="snippet", id=cache[language]).execute()
-            log.info(f"  Using existing {language} playlist")
             return cache[language]
         except HttpError:
-            log.warning(f"  Cached playlist not found, creating new...")
+            pass
 
     title = PLAYLIST_TITLES.get(language, f"Slowed + Reverb | {language.title()}")
-    description = f"All {language.title()} songs slowed to 80% with reverb. New uploads daily!"
+    description = f"All {language.title()} slowed + reverb tracks. New uploads daily!"
 
     try:
         response = youtube.playlists().insert(
@@ -97,13 +102,11 @@ def _get_or_create_playlist(youtube, language: str) -> str:
         ).execute()
 
         playlist_id = response["id"]
-        log.info(f"  ✓ Created {language} playlist")
         cache[language] = playlist_id
         _save_playlist_cache(cache)
         return playlist_id
 
-    except HttpError as e:
-        log.warning(f"  Failed to create playlist: {e}")
+    except HttpError:
         return None
 
 
@@ -121,9 +124,8 @@ def _add_to_playlist(youtube, video_id: str, playlist_id: str):
                 }
             }
         ).execute()
-        log.info(f"  ✓ Added to playlist")
-    except HttpError as e:
-        log.warning(f"  Failed to add to playlist: {e}")
+    except HttpError:
+        pass
 
 
 def upload_to_youtube(
@@ -174,12 +176,11 @@ def upload_to_youtube(
             videoId=video_id,
             media_body=MediaFileUpload(thumbnail_path, mimetype="image/jpeg"),
         ).execute()
-        log.info("  ✓ Thumbnail set!")
-    except HttpError as e:
-        log.warning(f"  Thumbnail upload failed: {e}")
+        log.info("  ✓ Thumbnail set")
+    except HttpError:
+        pass
 
     # Add to playlist
-    log.info(f"  Adding to {language} playlist...")
     playlist_id = _get_or_create_playlist(youtube, language)
     _add_to_playlist(youtube, video_id, playlist_id)
 
@@ -198,17 +199,16 @@ def _resumable_upload(request) -> str:
             status, response = request.next_chunk()
             if status:
                 pct = int(status.progress() * 100)
-                log.info(f"  ↑ Upload progress: {pct}%")
+                log.info(f"  ↑ {pct}%")
                 
         except HttpError as e:
-            # Check for quota exceeded
             if e.resp.status == 400:
                 error_content = str(e.content)
                 if "uploadLimitExceeded" in error_content or "quotaExceeded" in error_content:
-                    raise QuotaExceededError("Daily YouTube upload quota exceeded")
+                    raise QuotaExceededError("Daily quota exceeded")
             
             if e.resp.status in retry_codes:
-                error = f"HTTP {e.resp.status}: {e.content}"
+                error = f"HTTP {e.resp.status}"
             else:
                 raise
                 
@@ -218,9 +218,9 @@ def _resumable_upload(request) -> str:
         if error:
             retry += 1
             if retry > max_retry:
-                raise RuntimeError(f"Upload failed after {max_retry} retries: {error}")
+                raise RuntimeError(f"Upload failed after {max_retry} retries")
             wait = 2 ** retry
-            log.warning(f"  ⚠️  Upload error. Retrying in {wait}s...")
+            log.warning(f"  Retry in {wait}s...")
             time.sleep(wait)
             error = None
 
