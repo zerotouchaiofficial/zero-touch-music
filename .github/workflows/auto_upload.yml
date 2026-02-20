@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   upload:
-    name: 🚀 Upload (Rotating: Regular/Mashup)
+    name: " Upload (Rotating: Regular/Mashup) "
     runs-on: ubuntu-latest
     timeout-minutes: 90
     
