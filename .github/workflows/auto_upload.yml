@@ -1,9 +1,12 @@
-name: 🎵 Auto Upload Slowed+Reverb
+name: 🎵 Auto Upload (5x Daily: 4 Songs + 1 Mashup)
 
 on:
   schedule:
-    - cron: "0 6  * * *"   # 6 AM UTC
-    - cron: "0 14 * * *"   # 2 PM UTC  
+    # 5 uploads per day = 4 regular + 1 mashup
+    - cron: "0 2  * * *"   # 2 AM UTC
+    - cron: "0 8  * * *"   # 8 AM UTC
+    - cron: "0 14 * * *"   # 2 PM UTC
+    - cron: "0 18 * * *"   # 6 PM UTC
     - cron: "0 22 * * *"   # 10 PM UTC
   workflow_dispatch:
     inputs:
@@ -18,11 +21,10 @@ concurrency:
 
 jobs:
   upload:
-    name: 🚀 Upload
+    name: 🚀 Upload (Rotating: Regular/Mashup)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     
-    # CRITICAL: Give GITHUB_TOKEN write permission
     permissions:
       contents: write
 
@@ -30,7 +32,7 @@ jobs:
       - name: 📦 Checkout
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}  # Use built-in token
+          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: 🐍 Setup Python
@@ -49,16 +51,11 @@ jobs:
       - name: 📦 Python deps
         run: pip install -r requirements.txt
 
-      - name: 📁 Init output dir
+      - name: 📁 Init
         run: |
           mkdir -p output temp
-          if [ -f "output/uploaded.json" ]; then
-            if ! jq empty output/uploaded.json 2>/dev/null; then
-              echo "[]" > output/uploaded.json
-            fi
-          else
-            echo "[]" > output/uploaded.json
-          fi
+          [ -f "output/uploaded.json" ] || echo "[]" > output/uploaded.json
+          [ -f "output/upload_type.txt" ] || echo "0" > output/upload_type.txt
 
       - name: 🎵 Run pipeline
         env:
@@ -73,26 +70,15 @@ jobs:
           cd src
           python main.py
 
-      - name: 💾 Commit and push
+      - name: 💾 Commit
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
           git add output/*.json output/*.txt 2>/dev/null || true
-          
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "📝 Update upload logs [skip ci]"
-            
-            # Push with error handling
-            if git push; then
-              echo "✅ Changes pushed successfully"
-            else
-              echo "❌ Push failed - check repository permissions"
-              exit 1
-            fi
+          if ! git diff --staged --quiet; then
+            git commit -m "Update logs [skip ci]"
+            git push || echo "Push failed"
           fi
 
       - name: 📎 Artifacts
